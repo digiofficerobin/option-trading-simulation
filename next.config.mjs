@@ -1,1 +1,0 @@
-const nextConfig = { output: 'export', reactStrictMode: true, };
