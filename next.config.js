@@ -1,4 +1,6 @@
 export default {
   reactStrictMode: true,
-  output: 'export', // Required for static export
+  output: 'export',
+  basePath: '/option-trading-simulation',
+  assetPrefix: '/option-trading-simulation/',
 };
