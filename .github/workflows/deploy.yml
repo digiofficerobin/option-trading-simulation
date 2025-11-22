@@ -19,8 +19,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build and export static site
-        run: npm run build && npm run export
+      - name: Build static site
+        run: npm run build
 
       - name: Deploy to Published branch
         uses: peaceiris/actions-gh-pages@v3
