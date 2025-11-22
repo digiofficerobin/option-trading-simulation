@@ -11,6 +11,7 @@ import LearningPanel from '@/components/LearningPanel';
 import CoachPanel from '@/components/CoachPanel';
 import { templates, type Leg } from '@/lib/learn';
 import { bsmPrice } from '@/lib/blackScholes';
+import { PortfolioPanel } from '@/ui/PortfolioPanel';
 
 export default function Page(){
   const [env, setEnv] = useState<Env>({ r:0.03, q:0.00, sigma:0.25 });
@@ -207,7 +208,7 @@ export default function Page(){
       </div>
 
       <div>
-        
+        <PortfolioPanel />
       </div>
       {showAction && (
         <ActionPanel env={env} currentIndex={idx} position={pos} onClose={()=>{ setShowAction(false); setTemplateDraft(null); }} onSubmit={(apply)=>{ setShowAction(false); applyAction(apply); setTemplateDraft(null); }} hist={hist} preset={templateDraft} />
