@@ -203,6 +203,7 @@ export default function Page(){
 
         <LearningPanel S={S} T={(dte ?? 0)/365} env={env} onPick={onPickTemplate} />
         <CoachPanel S={S} env={env} dates={hist.dates.slice(0, idx+1)} prices={hist.prices.slice(0, idx+1)} jumpsEnabled={jumps.enabled} />
+		
       </div>
 
       <div>

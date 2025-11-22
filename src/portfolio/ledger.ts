@@ -1,4 +1,3 @@
-/* src/portfolio/ledger.ts */
 import { PortfolioSnapshot } from './types';
 
 export function realizedPnL(state: PortfolioSnapshot) {

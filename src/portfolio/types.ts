@@ -1,3 +1,4 @@
+// src/portfolio/types.ts
 export type Currency = 'USD' | 'EUR';
 
 export interface CashAccount {
