@@ -1,6 +1,3 @@
-
-$types = @'
-/* src/portfolio/types.ts */
 export type Currency = 'USD' | 'EUR';
 
 export interface CashAccount {
@@ -50,5 +47,3 @@ export interface PortfolioSnapshot {
 
 export interface FillSpec { price: number; timestamp?: number; }
 export interface AssignSpec { strike: number; contracts: number; timestamp?: number; }
-'@
-Set-Content -Encoding UTF8 "src\portfolio\types.ts" $types

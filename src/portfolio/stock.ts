@@ -1,6 +1,3 @@
-
-$stock = @'
-/* src/portfolio/stock.ts */
 import { CashAccount, StockLot, StockPosition, PortfolioSnapshot, LedgerEntry, FillSpec, AssignSpec } from './types';
 
 function now() { return Date.now(); }
@@ -144,5 +141,3 @@ export function computeUnrealizedPnL(state: PortfolioSnapshot, prices: Record<st
 export function newPortfolio(initialCash = 100000, currency: CashAccount['currency'] = 'USD'): PortfolioSnapshot {
   return { timestamp: now(), cash: { currency, available: initialCash, reserved: 0 }, positions: {}, ledger: [] };
 }
-'@
-Set-Content -Encoding UTF8 "src\portfolio\stock.ts" $stock
