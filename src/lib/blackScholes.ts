@@ -22,3 +22,9 @@ export function bsmGreeks(S:number,K:number,r:number,q:number,sigma:number,T:num
   const theta = right==='CALL'? theta_call : theta_put; // per year
   return { delta, gamma, vega, theta };
 }
+
+/** Round to 2 decimals (cents) safely to avoid FP drift */
+export function round2(v: number): number {
+  return Math.round((v + Number.EPSILON) * 100) / 100;
+}
+

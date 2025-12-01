@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { Env } from '@/lib/types';
 import { openStrategy, closeAll, closeSelected, openAdditional, previewDraftPremium, payoffCurveForDraft } from '@/lib/portfolio';
 import type { OpenPosition } from '@/lib/portfolio';
-import { bsmPrice } from '@/lib/blackScholes';
+import { bsmPrice, round2 } from '@/lib/blackScholes';
 import PayoffChart from './PayoffChart';
 
 type LegDraft = { id: string; side:'LONG'|'SHORT'; right:'CALL'|'PUT'; quantity:number; strike:number };
@@ -54,7 +54,7 @@ export function ActionPanel({ env, currentIndex, position, onClose, onSubmit, hi
               <tbody>
                 {position.legs.map(leg=>{
                   const TauNow = Math.max(0,(position.expiryIndex! - currentIndex)/365);
-                  const nowPx = bsmPrice(S, leg.strike, env.r, env.q, env.sigma, TauNow, leg.right);
+                  const nowPx = round2(bsmPrice(S, leg.strike, env.r, env.q, env.sigma, TauNow, leg.right));
                   const toClose = Math.max(0, Math.min(leg.quantity, closeMap[leg.id] ?? 0));
                   return (
                     <tr key={leg.id}>

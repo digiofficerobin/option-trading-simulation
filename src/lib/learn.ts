@@ -1,4 +1,4 @@
-import { bsmPrice } from './blackScholes';
+import { bsmPrice, round2 } from './blackScholes';
 import type { OptionRight, TradeSide, Env } from './types';
 function mulberry32(a: number){ return function(){ let t=a+=0x6D2B79F5; t=Math.imul(t^(t>>>15), t|1); t^=t+Math.imul(t^(t>>>7), t|61); return ((t^(t>>>14))>>>0)/4294967296; } }
 function boxMuller(rng:()=>number){ let u=0,v=0; while(u===0)u=rng(); while(v===0)v=rng(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
@@ -18,7 +18,7 @@ export function evaluateTemplates({ S0, T, env, seed=1234, n=3000 }: { S0:number
   const rng = mulberry32(seed|0); const results: EvalResult[] = [];
   for (const t of templates){
     const legs = t.build(S0);
-    const premium = legs.reduce((a,l)=> a + (l.side==='LONG'?1:-1) * l.quantity * bsmPrice(S0, l.strike, env.r, env.q, env.sigma, T, l.right), 0);
+    const premium = legs.reduce((a,l)=> a + (l.side==='LONG'?1:-1) * l.quantity * round2(bsmPrice(S0, l.strike, env.r, env.q, env.sigma, T, l.right)), 0);
     const pnl: number[] = [];
     for (let i=0;i<n;i++){
       const z = boxMuller(rng);

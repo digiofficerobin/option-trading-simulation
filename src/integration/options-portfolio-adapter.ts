@@ -38,11 +38,10 @@ export function onExerciseLongPut(symbol: string, strike: number, contracts: num
 }
 
 // --- Underlying quick actions ---
-export function buyUnderlying(symbol: string, shares: number, price: number) {
-  buyShares(portfolioStore.pf, symbol, shares, { price });
-  portfolioStore.setPrice(symbol, price);
+export function buyUnderlying(symbol: string, shares: number, price: number, timestamp: number) {
+  buyShares(portfolioStore.pf, symbol, shares, { price, timestamp });
 }
-export function sellUnderlying(symbol: string, shares: number, price: number) {
-  sellShares(portfolioStore.pf, symbol, shares, { price });
-  portfolioStore.setPrice(symbol, price);
+
+export function sellUnderlying(symbol: string, shares: number, price: number,  timestamp: number) {
+  sellShares(portfolioStore.pf, symbol, shares, { price, timestamp });
 }
