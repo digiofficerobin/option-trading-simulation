@@ -1,26 +1,53 @@
-import { bsmPrice, bsmGreeks } from './blackScholes';
+import { bsmPrice, bsmGreeks, round2 } from './blackScholes';
 import type { OptionRight, TradeSide } from '@/lib/types';
 import type { Env } from './types';
+
+const CONTRACT_MULTIPLIER = 100;
+
 export type LegPosition = { id:string; side:TradeSide; right:OptionRight; quantity:number; strike:number; entryPrice:number };
-export type OpenPosition = { legs:LegPosition[]; entryIndex?:number; expiryIndex?:number; realized:number };
+export interface OpenPosition {
+  expiryIndex?: number;
+  legs: Array<{
+    id: string;
+    side: 'LONG' | 'SHORT';
+    right: 'CALL' | 'PUT';
+    quantity: number;
+    strike: number;
+    entryPrice: number;
+
+    // record when the leg was opened (simulation time)
+    entryIndex?: number;       // timeline day index (0..N)
+    entryTimestamp?: number;   // epoch ms; Date.parse(hist.dates[entryIndex])
+  }>;
+  realized: number;
+}
+
 export function emptyPosition():OpenPosition{ return { legs:[], realized:0 }; }
 const sign = (s:TradeSide)=> s==='LONG'? 1 : -1;
 
 // ------ Pricing & Greeks ------
 export function legNowPrice(leg:Pick<LegPosition,'right'|'strike'>, env:Env, S:number, Tau:number){
-  return bsmPrice(S, leg.strike, env.r, env.q, env.sigma, Math.max(0,Tau), leg.right);
+  return round2(bsmPrice(S, leg.strike, env.r, env.q, env.sigma, Math.max(0,Tau), leg.right));
 }
 export function valueLeg(env:Env,S:number,T:number,leg:Pick<LegPosition,'side'|'right'|'quantity'|'strike'>){ return sign(leg.side)*leg.quantity*legNowPrice(leg,env,S,T); }
-export function valuePositionNow(pos:OpenPosition, env:Env, idx:number, hist:{prices:number[]}){
-  if (pos.legs.length===0) return { value:0, cost:0, unrealized:0, realized:pos.realized };
-  const S=hist.prices[idx]; const Tau=Math.max(0,(pos.expiryIndex!-idx)/365);
-  const value=pos.legs.reduce((a,l)=>a+valueLeg(env,S,Tau,l),0);
-  const cost=pos.legs.reduce((a,l)=>a+sign(l.side)*l.quantity*l.entryPrice,0);
-  const unrealized=value-cost; return { value, cost, unrealized, realized:pos.realized };
+
+export function valuePositionNow(pos: OpenPosition, env: Env, idx: number, hist: any) {
+  const S = hist.prices[idx] ?? 0;
+  const Tau = pos.expiryIndex !== undefined ? Math.max(0, (pos.expiryIndex - idx) / 365) : 0;
+
+  let value = 0;
+  for (const leg of pos.legs) {
+    const pxShare = round2(bsmPrice(S, leg.strike, env.r, env.q, env.sigma, Tau, leg.right));
+    const sign = leg.side === 'LONG' ? 1 : -1;
+    value += sign * (pxShare - leg.entryPrice) * CONTRACT_MULTIPLIER * leg.quantity;
+  }
+  return { value };
 }
+
 export function positionPnlTimeSeries(pos:OpenPosition, env:Env, currentIdx:number, hist:{prices:number[]}){
-  if (!pos.entryIndex || pos.legs.length===0) return new Array(currentIdx+1).fill(0);
-  const start=pos.entryIndex; const arr=new Array(currentIdx+1).fill(0);
+  if (pos.legs.length===0) return new Array(currentIdx+1).fill(0);
+  const start=pos.legs[0].entryIndex ?? 0; 
+  const arr=new Array(currentIdx+1).fill(0);
   for(let i=start;i<=currentIdx;i++){
     const S=hist.prices[i]; const Tau=Math.max(0,(pos.expiryIndex!-i)/365);
     const value=pos.legs.reduce((a,l)=>a+valueLeg(env,S,Tau,l),0);
@@ -30,7 +57,7 @@ export function positionPnlTimeSeries(pos:OpenPosition, env:Env, currentIdx:numb
   for(let i=0;i<start;i++) arr[i]=0; return arr;
 }
 export function greeksNow(pos:OpenPosition, env:Env, idx:number, hist:{prices:number[]}){
-  const S=hist.prices[idx]; const Tau=Math.max(0,(pos.expiryIndex!? pos.expiryIndex!-idx : 0)/365);
+  const S=round2(hist.prices[idx]); const Tau=Math.max(0,(pos.expiryIndex!? pos.expiryIndex!-idx : 0)/365);
   const g = pos.legs.reduce((acc,l)=>{
     const gr = bsmGreeks(S,l.strike,env.r,env.q,env.sigma,Math.max(1e-8,Tau),l.right);
     acc.delta += sign(l.side)*l.quantity*gr.delta;
@@ -42,9 +69,9 @@ export function greeksNow(pos:OpenPosition, env:Env, idx:number, hist:{prices:nu
   return g;
 }
 export function greeksTimeSeries(pos:OpenPosition, env:Env, currentIdx:number, hist:{prices:number[]}){
-  const start = pos.entryIndex ?? currentIdx; const out = { delta:[], theta:[], vega:[], gamma:[], idxStart:start } as any;
+  const start = currentIdx; const out = { delta:[], theta:[], vega:[], gamma:[], idxStart:start } as any;
   for (let i=0;i<=currentIdx;i++){
-    if (!pos.entryIndex || i<start){ out.delta.push(0); out.theta.push(0); out.vega.push(0); out.gamma.push(0); continue; }
+    if (i<start){ out.delta.push(0); out.theta.push(0); out.vega.push(0); out.gamma.push(0); continue; }
     const S=hist.prices[i]; const Tau=Math.max(0,(pos.expiryIndex!-i)/365);
     const g = pos.legs.reduce((acc,l)=>{
       const gr=bsmGreeks(S,l.strike,env.r,env.q,env.sigma,Math.max(1e-8,Tau),l.right);
@@ -66,11 +93,11 @@ export function pnlCurveAtTau(
   Sref: number,
   Tau: number
 ): [number[], number[]] {
-  if (!pos.entryIndex || pos.legs.length === 0) return [[], []];
+  if (pos.legs.length === 0) return [[], []];
 
   // Premium: LONG = negative (debit), SHORT = positive (credit)
   const premium = pos.legs.reduce(
-    (acc, l) => acc + (l.side === 'LONG' ? -1 : +1) * l.quantity * l.entryPrice,
+    (acc, l) => acc + (l.side === 'LONG' ? -1 : +1) * l.quantity * l.entryPrice * CONTRACT_MULTIPLIER,
     0
   );
 
@@ -86,8 +113,8 @@ export function pnlCurveAtTau(
 
     // Current theoretical value (BSM) at Tau
     const val = pos.legs.reduce((acc, l) => {
-      const px = bsmPrice(S, l.strike, env.r, env.q, env.sigma, Math.max(0, Tau), l.right);
-      return acc + (l.side === 'LONG' ? 1 : -1) * l.quantity * px;
+      const px = round2(bsmPrice(S, l.strike, env.r, env.q, env.sigma, Math.max(0, Tau), l.right));
+      return acc + (l.side === 'LONG' ? 1 : -1) * l.quantity * px * CONTRACT_MULTIPLIER;
     }, 0);
 
     // Effective P/L = current value + premium (premium is negative for LONG)
@@ -101,11 +128,11 @@ export function payoutCurveAtExpiry(
   pos: OpenPosition,
   Sref: number
 ): [number[], number[]] {
-  if (!pos.entryIndex || pos.legs.length === 0) return [[], []];
+  if (pos.legs.length === 0) return [[], []];
 
   // Premium: LONG = negative (debit), SHORT = positive (credit)
   const premium = pos.legs.reduce(
-    (acc, l) => acc + (l.side === 'LONG' ? -1 : +1) * l.quantity * l.entryPrice,
+    (acc, l) => acc + (l.side === 'LONG' ? -1 : +1) * l.quantity * l.entryPrice * CONTRACT_MULTIPLIER,
     0
   );
 
@@ -124,7 +151,7 @@ export function payoutCurveAtExpiry(
       const intr = l.right === 'CALL'
         ? Math.max(0, S - l.strike)
         : Math.max(0, l.strike - S);
-      return acc + (l.side === 'LONG' ? 1 : -1) * l.quantity * intr;
+      return acc + (l.side === 'LONG' ? 1 : -1) * l.quantity * intr * CONTRACT_MULTIPLIER;
     }, 0);
 
     xs.push(S);
@@ -150,13 +177,26 @@ export function marginRequirement(pos:OpenPosition, S:number){
   return Math.max(0, req);
 }
 
-// ------ Cashflows for trades ------
-export function cashChangeOpen(legs:{side:TradeSide,right:OptionRight,quantity:number,price:number}[]){
-  return legs.reduce((a,l)=> a + (l.side==='LONG'? -1: +1) * l.quantity * l.price, 0);
+export function cashChangeOpen(
+  legsCash: { side: 'LONG'|'SHORT'; right: 'CALL'|'PUT'; quantity: number; price: number }[]
+) {
+  // LONG pays premium; SHORT receives premium
+  return legsCash.reduce((acc, l) => {
+    const sign = l.side === 'LONG' ? -1 : +1;
+    return acc + sign * l.quantity * l.price * CONTRACT_MULTIPLIER;
+  }, 0);
 }
-export function cashChangeClose(legs:{side:TradeSide,right:OptionRight,quantity:number,price:number}[]){
-  return legs.reduce((a,l)=> a + (l.side==='LONG'? +1: -1) * l.quantity * l.price, 0);
+
+export function cashChangeClose(
+  legsCash: { side: 'LONG'|'SHORT'; right: 'CALL'|'PUT'; quantity: number; price: number }[]
+) {
+  // Closing: LONG receives (sell); SHORT pays (buy to close)
+  return legsCash.reduce((acc, l) => {
+    const sign = l.side === 'LONG' ? +1 : -1;
+    return acc + sign * l.quantity * l.price * CONTRACT_MULTIPLIER;
+  }, 0);
 }
+
 
 // High-level helpers to compute cash deltas alongside position updates are applied in page.tsx
 // ===========================
@@ -178,7 +218,7 @@ export function openStrategy(
   }
 ): OpenPosition {
   const expiryIndex = idx + Math.max(1, Math.round(draft.expiryDays));
-  const S = hist.prices[idx];
+  const S = round2(hist.prices[idx]);
   const Tau = (expiryIndex - idx) / 365;
 
   const legs = draft.legs.map(l => ({
@@ -188,9 +228,10 @@ export function openStrategy(
     quantity: l.quantity,
     strike: l.strike,
     entryPrice: legNowPrice(l as any, env, S, Tau), // price per 1 at entry
+    entryIndex: idx
   }));
 
-  return { legs, entryIndex: idx, expiryIndex, realized: pos.realized };
+  return { legs, expiryIndex, realized: pos.realized };
 }
 
 /**
@@ -206,7 +247,7 @@ export function openAdditional(
   if (pos.expiryIndex === undefined) {
     throw new Error('openAdditional: no existing expiry to add to');
   }
-  const S = hist.prices[idx];
+  const S = round2(hist.prices[idx]);
   const Tau = Math.max(0, (pos.expiryIndex - idx) / 365);
 
   const add = legsDraft.map(l => ({
@@ -235,7 +276,7 @@ export function closeSelected(
 ): OpenPosition {
   if (pos.legs.length === 0) return pos;
 
-  const S = hist.prices[idx];
+  const S = round2(hist.prices[idx]);
   const Tau = Math.max(0, (pos.expiryIndex! - idx) / 365);
 
   let realized = pos.realized;
@@ -257,7 +298,6 @@ export function closeSelected(
   const res: OpenPosition = { ...pos, legs: nextLegs, realized };
 
   if (res.legs.length === 0) {
-    res.entryIndex = undefined;
     res.expiryIndex = undefined;
   }
   return res;
@@ -275,7 +315,7 @@ export function closeAll(
 ): OpenPosition {
   if (pos.legs.length === 0) return pos;
 
-  const S = hist.prices[idx];
+  const S = round2(hist.prices[idx]);
   const Tau = Math.max(0, (pos.expiryIndex! - idx) / 365);
 
   // Current value of the position at mid/fair
@@ -288,7 +328,7 @@ export function closeAll(
   );
 
   const realized = pos.realized + (closeValue - cost);
-  return { legs: [], entryIndex: undefined, expiryIndex: undefined, realized };
+  return { legs: [], expiryIndex: undefined, realized };
 }
 
 /**
@@ -327,7 +367,7 @@ export function previewDraftPremium(
       a +
       (l.side === 'LONG' ? 1 : -1) *
         l.quantity *
-        bsmPrice(S, l.strike, env.r, env.q, env.sigma, Math.max(0, Tau), l.right),
+        round2(bsmPrice(S, l.strike, env.r, env.q, env.sigma, Math.max(0, Tau), l.right)),
     0
   );
 }
@@ -362,3 +402,5 @@ export function payoffCurveForDraft(
   }
   return [xs, ys];
 }
+
+

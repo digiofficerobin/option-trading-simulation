@@ -19,31 +19,143 @@ function recalcPosition(pos: StockPosition) {
   pos.avgCost = totalShares > 0 ? totalCost / totalShares : 0;
 }
 
-export function buyShares(state: PortfolioSnapshot, symbol: string, shares: number, fill: FillSpec) {
+
+export function buyShares(
+  state: PortfolioSnapshot,
+  symbol: string,
+  shares: number,
+  fill: FillSpec
+) {
+  // ✅ Require a simulation timestamp (derived from hist.dates[idx])
+  if (!Number.isFinite(fill.timestamp)) {
+    throw new Error('buyShares: fill.timestamp (simulation timeline day) is required');
+  }
+  const ts = fill.timestamp as number;
+
   const cost = shares * fill.price;
-  if (state.cash.available < cost) throw new Error('Insufficient cash: need ${cost.toFixed(2)}, have ${state.cash.available.toFixed(2)}');
+  if (state.cash.available < cost) {
+    // ✅ use backticks for template interpolation
+    throw new Error(
+      `Insufficient cash: need ${cost.toFixed(2)}, have ${state.cash.available.toFixed(2)}`
+    );
+  }
+
   state.cash.available -= cost;
-  const lot: StockLot = { lotId: uid('lot'), symbol, shares, costBasis: fill.price, openedAt: fill.timestamp ?? now() };
+
+  const lot: StockLot = {
+    lotId: uid('lot'),
+    symbol,
+    shares,
+    costBasis: fill.price,
+    openedAt: ts,                  // ✅ simulation day timestamp
+  };
+
   const pos = ensurePosition(state, symbol);
-  pos.lots.push(lot); recalcPosition(pos);
-  pushLedger(state, { id: uid('led'), timestamp: fill.timestamp ?? now(), type: 'BUY_STOCK', symbol, details: { shares, price: fill.price }, cashDelta: -(shares*fill.price), realizedPnL: 0 });
+  pos.lots.push(lot);
+  recalcPosition(pos);
+
+  // ✅ include qty and costBasis for history %P/L; use sim timestamp
+  pushLedger(state, {
+    id: uid('led'),
+    timestamp: ts,                 // ✅ simulation day timestamp
+    type: 'BUY_STOCK',
+    symbol,
+    details: { qty: shares, price: fill.price, costBasis: cost },
+    cashDelta: -cost,
+    realizedPnL: 0,
+  });
 }
 
-export function sellShares(state: PortfolioSnapshot, symbol: string, shares: number, fill: FillSpec) {
-  const pos = ensurePosition(state, symbol);
-  if (shares > (pos.totalShares - pos.reservedShares)) throw new Error('Insufficient free shares: ${pos.totalShares - pos.reservedShares}');
-  let remaining = shares, realized = 0;
-  while (remaining > 0) {
-    const lot = pos.lots[0]; if (!lot) throw new Error('Missing lot');
-    const use = Math.min(remaining, lot.shares);
-    realized += use * (fill.price - lot.costBasis);
-    lot.shares -= use; if (lot.shares === 0) pos.lots.shift();
-    remaining -= use;
+
+export function sellShares(
+  state: PortfolioSnapshot,
+  symbol: string,
+  shares: number,
+  fill: FillSpec
+) {
+  // ✅ Require a simulation timestamp (epoch ms matching hist.dates[idx])
+  if (!Number.isFinite(fill.timestamp)) {
+    throw new Error('sellShares: fill.timestamp (simulation timeline day) is required');
   }
+  const ts = fill.timestamp as number;
+
+  // Ensure we have a position for this symbol
+  const pos = ensurePosition(state, symbol);
+
+  // Optional: enforce reserved shares logic
+  const available = (pos.totalShares ?? 0) - (pos.reservedShares ?? 0);
+  if (shares > available) {
+    throw new Error(`Insufficient available shares: want ${shares}, have ${available}`);
+  }
+
+  // FIFO lot consumption -> cost basis of what we sell
+  const { totalCost, breakdown } = consumeLotsFIFO(pos, shares);
+
+  // Proceeds and realized P/L
   const proceeds = shares * fill.price;
-  state.cash.available += proceeds; recalcPosition(pos);
-  pushLedger(state, { id: uid('led'), timestamp: fill.timestamp ?? now(), type: 'SELL_STOCK', symbol, details: { shares, price: fill.price }, cashDelta: +proceeds, realizedPnL: realized });
+  const realized = proceeds - totalCost;
+
+  // Cash increases by proceeds
+  state.cash.available += proceeds;
+
+  // Recalculate aggregate fields on position
+  recalcPosition(pos);
+
+  // Write ledger with a detailed breakdown (great for your Trade History)
+  pushLedger(state, {
+    id: uid('led'),
+    timestamp: ts,
+    type: 'SELL_STOCK',
+    symbol,
+    details: {
+      qty: shares,
+      price: fill.price,
+      costBasis: totalCost,     // consumed basis for these shares
+      lots: breakdown           // [{ lotId, qty, lotCostBasis }, ...]
+    },
+    cashDelta: proceeds,
+    realizedPnL: realized
+  });
 }
+
+
+// FIFO lot consumption: removes `sharesToSell` from oldest lots first.
+// Returns total cost basis consumed and a per-lot breakdown usable for ledger audit.
+function consumeLotsFIFO(pos: StockPosition, sharesToSell: number) {
+  // sort lots by openedAt ascending (oldest first)
+  pos.lots.sort((a, b) => a.openedAt - b.openedAt);
+
+  let remaining = sharesToSell;
+  let totalCost = 0;
+
+  const breakdown: Array<{ lotId: string; qty: number; lotCostBasis: number }> = [];
+
+  for (const lot of pos.lots) {
+    if (remaining <= 0) break;
+    if (lot.shares <= 0) continue;
+
+    const take = Math.min(lot.shares, remaining);
+    const costForThis = take * lot.costBasis;
+
+    // reduce the lot
+    lot.shares -= take;
+    totalCost += costForThis;
+    breakdown.push({ lotId: lot.lotId, qty: take, lotCostBasis: lot.costBasis });
+
+    remaining -= take;
+  }
+
+  if (remaining > 0) {
+    // Restore original state if desired; for now, throw
+    throw new Error(`Insufficient shares: need ${sharesToSell}, but only ${sharesToSell - remaining} available in lots`);
+  }
+
+  // Remove any depleted lots
+  pos.lots = pos.lots.filter(l => l.shares > 0);
+
+  return { totalCost, breakdown };
+}
+
 
 export function reserveSharesForShortCall(state: PortfolioSnapshot, symbol: string, contracts: number, timestamp?: number) {
   const pos = ensurePosition(state, symbol);
@@ -139,5 +251,5 @@ export function computeUnrealizedPnL(state: PortfolioSnapshot, prices: Record<st
 }
 
 export function newPortfolio(initialCash = 100000, currency: CashAccount['currency'] = 'USD'): PortfolioSnapshot {
-  return { timestamp: now(), cash: { currency, available: initialCash, reserved: 0 }, positions: {}, ledger: [] };
+  return { timestamp: now(), cash: { currency, available: initialCash, initial: initialCash, reserved: 0 }, positions: {}, ledger: [] };
 }
